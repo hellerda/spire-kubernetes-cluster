@@ -1,0 +1,203 @@
+# NestedB Server deployment...
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nestedb-server
+  namespace: spire
+
+---
+
+# ClusterRole to allow nestedb-server node attestor to query Token Review API
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nestedb-server-cluster-role
+rules:
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+
+---
+
+# Binds above cluster role to nestedb-server service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nestedb-server-cluster-role-binding
+subjects:
+- kind: ServiceAccount
+  name: nestedb-server
+  namespace: spire
+roleRef:
+  kind: ClusterRole
+  name: nestedb-server-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nestedb-server-conf
+  namespace: spire
+data:
+  server.conf: |
+    server {
+      trust_domain = "example.org"
+      jwt_issuer = "spire-nestedb-server"
+      bind_address = "0.0.0.0"
+      bind_port = "8081"
+      #socket_path = "/tmp/spire-server/private/api.sock"
+      data_dir = "/run/spire/data"
+      log_level = "DEBUG"
+      default_svid_ttl = "24h"
+      ca_ttl = "24h"
+      # ca_subject = {
+      #   country = ["US"],
+      #   organization = ["SPIFFE"],
+      #   common_name = "",
+      # }
+
+      federation {
+        bundle_endpoint {
+          address = "0.0.0.0"
+          port = 8443
+        }
+      }
+    }
+
+    plugins {
+      DataStore "sql" {
+        plugin_data {
+          database_type = "sqlite3"
+          connection_string = "/run/spire/data/datastore.sqlite3"
+        }
+      }
+
+      NodeAttestor "k8s_sat" {
+        plugin_data {
+          clusters = {
+            "spire" = {
+              service_account_allow_list = ["spire:nestedb-agent","spire:nested-csi-agent"]
+              use_token_review_api_validation = true
+            }
+          }
+        }
+      }
+
+      KeyManager "disk" {
+        plugin_data {
+          keys_path = "/run/spire/data/keys.json"
+        }
+      }
+
+      UpstreamAuthority "spire" {
+        plugin_data = {
+            server_address      = "root-server"
+            server_port         = 8081
+            # This is points to Root Agent's API socket:
+            workload_api_socket = "/run/spire/sockets/agent.sock"
+        }
+      }
+    }
+
+    health_checks {
+      listener_enabled = true
+      bind_address = "0.0.0.0"
+      bind_port = "8080"
+      live_path = "/live"
+      ready_path = "/ready"
+    }
+
+---
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nestedb-server
+  namespace: spire
+  labels:
+    app: nestedb-server
+    realm: spire-control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nestedb-server
+  serviceName: nestedb-server
+  template:
+    metadata:
+      namespace: spire
+      labels:
+        app: nestedb-server
+        realm: spire-control-plane
+    spec:
+      serviceAccountName: nestedb-server
+      containers:
+        - name: nestedb-server
+          image: gcr.io/spiffe-io/spire-server:1.5.3
+          args: ["-config", "/run/spire/config/server.conf"]
+          ports:
+            - containerPort: 8081
+          volumeMounts:
+            - name: spire-config
+              mountPath: /run/spire/config
+              readOnly: true
+            - name: spire-data
+              mountPath: /run/spire/data
+              readOnly: false
+              # For accessing the root-agent socket, so this server can attest as a downstream...
+            - name: root-agent-socket
+              mountPath: /run/spire/sockets
+              readOnly: false
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8080
+            failureThreshold: 2
+            initialDelaySeconds: 15
+            periodSeconds: 6000
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: spire-config
+          configMap:
+            name: nestedb-server-conf
+          # For accessing the root-agent socket, so this server can attest as a downstream node.
+        - name: root-agent-socket
+          hostPath:
+            path: /run/spire/sockets/root
+            type: Directory
+  volumeClaimTemplates:
+    - metadata:
+        name: spire-data
+        namespace: spire
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: nestedb-server
+  namespace: spire
+spec:
+  type: NodePort
+  ports:
+    - name: grpc
+      port: 8081
+      targetPort: 8081
+      protocol: TCP
+  selector:
+    app: nestedb-server

@@ -1,0 +1,144 @@
+# General purpose workload with Envoy proxy (for x509 auth) plus optional Emissary (for JWT auth)...
+
+# Custom ServiceAccount for this Pod.  Otherwise it will use the default ServiceAccount.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spiffe-client-envoy-emissary
+  namespace: spire
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spiffe-client-envoy-emissary-cluster-role
+rules:
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+
+---
+
+# Binds above cluster role to spiffe-client-envoy-emissary service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spiffe-client-envoy-emissary-cluster-role-binding
+subjects:
+- kind: ServiceAccount
+  name: spiffe-client-envoy-emissary
+  namespace: spire
+roleRef:
+  kind: ClusterRole
+  name: spiffe-client-envoy-emissary-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spiffe-client-envoy-emissary
+  labels:
+    app: spiffe-client-envoy-emissary
+    namespace: spire
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spiffe-client-envoy-emissary
+      namespace: spire
+  template:
+    metadata:
+      labels:
+        app: spiffe-client-envoy-emissary
+        namespace: spire
+        # Toggle K8sr auto-Spiffe ID creation for this Pod...
+        spiffe.io/spiffe-id: "true"
+    spec:
+      # hostPID: true
+      # hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: spiffe-client-envoy-emissary
+      containers:
+          # The Envoy proxy...
+        - name: envoy
+          image: envoyproxy/envoy-alpine:v1.14.1
+          imagePullPolicy: Always
+        # args: ["-l", "debug", "--local-address-ip-version", "v4", "-c", "/run/envoy/envoy-config-inbound-emissary.yaml", "--base-id", "1"]
+          args: ["-l", "debug", "--local-address-ip-version", "v4", "-c", "/run/envoy/envoy-config-outbound-emissary.yaml", "--base-id", "1"]
+          resources:
+            limits:
+          volumeMounts:
+          - name: envoy-config
+            mountPath: "/run/envoy"
+            readOnly: true
+            # Envoy needs access to SPIRE Agent...
+          - name: spire-agent-socket
+            mountPath: /run/spire/sockets
+            readOnly: true
+            # And access to Emissary...
+          - name: emissary-socket
+            mountPath: /run/emissary/sockets
+            readOnly: false
+          # The Emissary JWT handler...
+          # - To build the image see: https://github.com/github/emissary/blob/master/Dockerfile)
+        - name: emissary
+          image: 123456789123.dkr.ecr.us-east-2.amazonaws.com/spire/emissary:latest
+          volumeMounts:
+            # Emissary needs access to SPIRE Agent...
+          - name: spire-agent-socket
+            mountPath: /run/spire/sockets
+            readOnly: true
+            # And a place to mount its socket...
+          - name: emissary-socket
+            mountPath: /run/emissary/sockets
+            readOnly: false
+          env:
+          - name: EMISSARY_LOG_LEVEL
+            value: debug
+          - name: EMISSARY_SPIRE_SOCKET
+            value: /run/spire/sockets/agent.sock
+          - name: EMISSARY_IDENTIFIER
+            value: "spiffe://example.org/ns/spire/sa/spiffe-client-envoy-emissary"
+          - name: EMISSARY_INGRESS_MAP
+            value: '{"spiffe://example.org/nestedc-workload-ec2": [{"path":"/","methods":["GET"]}], "spiffe://example.org/ns/spire/sa/spiffe-client": [{"path":"/","methods":["GET"]}]}'
+          - name: EMISSARY_EGRESS_MAP
+            # If DNS not is available, you can add a hostname entry to client's /etc/hosts and use it here.
+            # This is a map that can have multiple values. Key can be hostname, FQDN or IP.
+            value: '{"targethost:2222": "spiffe://example.org/ns/spire/sa/spiffe-client"}'
+          livenessProbe:
+            httpGet:
+              port: 9191
+            initialDelaySeconds: 3
+            periodSeconds: 60
+          # The workload...
+        - name: spiffe-client
+          image: 123456789123.dkr.ecr.us-east-2.amazonaws.com/spiffe-client:latest
+          command: ["sleep", "infinity"]
+          resources:
+            limits:
+              memory: 512Mi
+              cpu: "1"
+            requests:
+              memory: 256Mi
+              cpu: "0.2"
+          volumeMounts:
+            - name: spire-agent-socket
+              mountPath: /run/spire/sockets
+              # mountPath: /tmp/spire-agent/public
+              readOnly: true
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+        - name: spire-agent-socket
+          hostPath:
+            # We should be able to use any agent in spire-kubernetes-cluster, as long as it has this volume mounted.
+            # path: /run/spire/sockets/nesteda
+            # path: /run/spire/sockets/nestedb
+            path: /run/spire/sockets/nestedc
+            type: Directory
+        - name: emissary-socket
+          emptyDir: {}

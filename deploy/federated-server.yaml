@@ -1,0 +1,98 @@
+# Federated Server StatefulSet and Service...
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: federated-server
+  namespace: spire
+  labels:
+    app: federated-server
+    realm: spire-control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: federated-server
+  serviceName: federated-server
+  template:
+    metadata:
+      namespace: spire
+      labels:
+        app: federated-server
+        realm: spire-control-plane
+    spec:
+      serviceAccountName: federated-server
+      containers:
+        - name: federated-server
+          image: gcr.io/spiffe-io/spire-server:1.5.3
+          args: ["-config", "/run/spire/config/server.conf"]
+          ports:
+            - containerPort: 8081
+          volumeMounts:
+            - name: spire-config
+              mountPath: /run/spire/config
+              readOnly: true
+            - name: spire-data
+              mountPath: /run/spire/data
+              readOnly: false
+            - name: spire-upstream-authority-cert
+              mountPath: /run/spire/ua-cert
+              readOnly: true
+            - name: spire-upstream-authority-key
+              mountPath: /run/spire/ua-key
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8080
+            failureThreshold: 2
+            initialDelaySeconds: 15
+            periodSeconds: 6000
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: spire-config
+          configMap:
+            name: federated-server-conf
+        - name: spire-upstream-authority-cert
+          configMap:
+            name: federated-server-upstream-authority
+        - name: spire-upstream-authority-key
+          secret:
+            secretName: federated-server-upstream-authority
+  volumeClaimTemplates:
+    - metadata:
+        name: spire-data
+        namespace: spire
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: federated-server
+  namespace: spire
+spec:
+  type: NodePort
+  ports:
+    - name: grpc
+      port: 8081
+      targetPort: 8081
+      protocol: TCP
+    - name: fed-endpoint
+      port: 8443
+      targetPort: 8443
+      protocol: TCP
+  selector:
+    app: federated-server

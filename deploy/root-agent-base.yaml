@@ -1,0 +1,112 @@
+# Root Agent base config...
+# - Namespace, ServiceAccount,ClusterRole, ClusterRoleBinding, ConfigMaps, Secrets, etc.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: root-agent
+  namespace: spire
+
+---
+
+# ClusterRole to allow root-agent workload attestor to query the kubelet using secure port
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: root-agent-cluster-role
+rules:
+- apiGroups: [""]
+  resources: ["nodes/proxy"]
+  verbs: ["get"]
+
+---
+
+# Binds above cluster role to root-agent service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: root-agent-cluster-role-binding
+subjects:
+- kind: ServiceAccount
+  name: root-agent
+  namespace: spire
+roleRef:
+  kind: ClusterRole
+  name: root-agent-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+
+# Static seed for bootstrap cert, which can be UpstreamAuthority cert if UpstreamAuthority is enabled.
+# To overwrite this with cert from gen-upstream-authority-configmap(), use duplicate-configmap-simple().
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: root-agent-bootstrap-cert
+  namespace: spire
+data:
+  bootstrap.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIIB2jCCAYCgAwIBAgIUQd7/U2270XzbBpwSWYr08fL1dUowCgYIKoZIzj0EAwIw
+    KTEnMCUGA1UEAwwedXBzdHJlYW0tYXV0aG9yaXR5LmV4YW1wbGUub3JnMB4XDTIy
+    MDkxMDIxMDExNVoXDTMyMDkwNzIxMDExNVowKTEnMCUGA1UEAwwedXBzdHJlYW0t
+    YXV0aG9yaXR5LmV4YW1wbGUub3JnMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE
+    RFtrDQhvACzViAAbLwalFDfTzsGHEDkGmHimT+n9LrYja2wJc1yDsi5dZpMcxBlG
+    0XXoj48czQ5vYAXV+NHTsqOBhTCBgjAdBgNVHQ4EFgQUb+40UJVAtq72SyDW4Kcg
+    zZD/CK4wHwYDVR0jBBgwFoAUb+40UJVAtq72SyDW4KcgzZD/CK4wDwYDVR0TAQH/
+    BAUwAwEB/zAfBgNVHREEGDAWhhRzcGlmZmU6Ly9leGFtcGxlLm9yZzAOBgNVHQ8B
+    Af8EBAMCAQYwCgYIKoZIzj0EAwIDSAAwRQIgbZWaAticK3342ulJP0y7nZ7Pwyr1
+    0HMXxHqm+v3e9dICIQCr1gFEsXzZWZPHMQ/ms4QslIcSBwwespp3bqiQui42Jg==
+    -----END CERTIFICATE-----
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: root-agent-conf
+  namespace: spire
+data:
+  agent.conf: |
+    agent {
+      data_dir = "/run/spire"
+      log_level = "DEBUG"
+      server_address = "root-server"
+      server_port = "8081"
+      socket_path = "/run/spire/sockets/agent.sock"
+      trust_domain = "example.org"
+      #insecure_bootstrap = true
+      #trust_bundle_path = "/run/spire/config/bootstrap.crt"
+      trust_bundle_path = "/run/spire/bootstrap/bootstrap.crt"
+    }
+
+    plugins {
+      NodeAttestor "k8s_sat" {
+        plugin_data {
+          cluster = "spire"
+        }
+      }
+
+      KeyManager "memory" {
+        plugin_data {
+        }
+      }
+
+      WorkloadAttestor "k8s" {
+        plugin_data {
+        }
+      }
+
+      # WorkloadAttestor "unix" {
+      #     plugin_data {
+      #     }
+      # }
+    }
+
+    health_checks {
+      listener_enabled = true
+      bind_address = "0.0.0.0"
+      bind_port = "8080"
+      live_path = "/live"
+      ready_path = "/ready"
+    }

@@ -1,0 +1,113 @@
+# Federated Agent base config...
+# - Namespace, ServiceAccount,ClusterRole, ClusterRoleBinding, ConfigMaps, Secrets, etc.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: federated-agent
+  namespace: spire
+
+---
+
+# ClusterRole to allow federated-agent workload attestor to query the kubelet using secure port
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: federated-agent-cluster-role
+rules:
+- apiGroups: [""]
+  resources: ["nodes/proxy"]
+  verbs: ["get"]
+
+---
+
+# Binds above cluster role to federated-agent service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: federated-agent-cluster-role-binding
+subjects:
+- kind: ServiceAccount
+  name: federated-agent
+  namespace: spire
+roleRef:
+  kind: ClusterRole
+  name: federated-agent-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+
+# Static seed for bootstrap cert, which can be UpstreamAuthority cert if UpstreamAuthority is enabled.
+# To overwrite this with cert from gen-upstream-authority-configmap(), use duplicate-configmap-simple().
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: federated-agent-bootstrap-cert
+  namespace: spire
+data:
+  bootstrap.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIIB4DCCAYagAwIBAgIUTaXSXAOwyXXSnTvZL4dF3NXXZWwwCgYIKoZIzj0EAwIw
+    KzEpMCcGA1UEAwwgdXBzdHJlYW0tYXV0aG9yaXR5LmF1eGlsaWFyeS5vcmcwHhcN
+    MjIwOTEwMjIzMDI3WhcNMzIwOTA3MjIzMDI3WjArMSkwJwYDVQQDDCB1cHN0cmVh
+    bS1hdXRob3JpdHkuYXV4aWxpYXJ5Lm9yZzBZMBMGByqGSM49AgEGCCqGSM49AwEH
+    A0IABIzO73yM2pQFh5DbqA2/r2pxyzg9yNdFbOl8fu1vFzqadBx3Wyrlann4wii/
+    WSJ62G1y9jpZWhs8W8KcQeTu/r6jgYcwgYQwHQYDVR0OBBYEFB4u2+iOSOBO/0om
+    Dq88oiAjqTOyMB8GA1UdIwQYMBaAFB4u2+iOSOBO/0omDq88oiAjqTOyMA8GA1Ud
+    EwEB/wQFMAMBAf8wIQYDVR0RBBowGIYWc3BpZmZlOi8vYXV4aWxpYXJ5Lm9yZzAO
+    BgNVHQ8BAf8EBAMCAQYwCgYIKoZIzj0EAwIDSAAwRQIhAKNsVz6Uo9GxoAGVsBrD
+    i891f7SEsmDayeQYA+EoO7vbAiAKTAkKtVRsz/W740k32PpMP8ZpYsH2aTkIkN4t
+    B35yMg==
+    -----END CERTIFICATE-----
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: federated-agent-conf
+  namespace: spire
+data:
+  agent.conf: |
+    agent {
+      data_dir = "/run/spire"
+      log_level = "DEBUG"
+      server_address = "federated-server"
+      server_port = "8081"
+      socket_path = "/run/spire/sockets/agent.sock"
+      trust_domain = "auxiliary.org"
+      #insecure_bootstrap = true
+      #trust_bundle_path = "/run/spire/config/bootstrap.crt"
+      trust_bundle_path = "/run/spire/bootstrap/bootstrap.crt"
+    }
+
+    plugins {
+      NodeAttestor "k8s_sat" {
+        plugin_data {
+          cluster = "spire"
+        }
+      }
+
+      KeyManager "memory" {
+        plugin_data {
+        }
+      }
+
+      WorkloadAttestor "k8s" {
+        plugin_data {
+        }
+      }
+
+      # WorkloadAttestor "unix" {
+      #     plugin_data {
+      #     }
+      # }
+    }
+
+    health_checks {
+      listener_enabled = true
+      bind_address = "0.0.0.0"
+      bind_port = "8080"
+      live_path = "/live"
+      ready_path = "/ready"
+    }

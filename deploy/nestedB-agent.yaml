@@ -1,0 +1,184 @@
+# NestedB Agent base config and Daemonset...
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nestedb-agent
+  namespace: spire
+
+---
+
+# ClusterRole to allow nestedb-agent workload attestor to query the kubelet using secure port
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nestedb-agent-cluster-role
+rules:
+- apiGroups: [""]
+  resources: ["nodes/proxy"]
+  verbs: ["get"]
+
+---
+
+# Binds above cluster role to nestedb-agent service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nestedb-agent-cluster-role-binding
+subjects:
+- kind: ServiceAccount
+  name: nestedb-agent
+  namespace: spire
+roleRef:
+  kind: ClusterRole
+  name: nestedb-agent-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+
+# Static seed for bootstrap cert, which can be UpstreamAuthority cert if UpstreamAuthority is enabled.
+# To overwrite this with cert from gen-upstream-authority-configmap(), use duplicate-configmap-simple().
+# apiVersion: v1
+# kind: ConfigMap
+# metadata:
+#   name: nestedb-agent-bootstrap-cert
+#   namespace: spire
+# data:
+#   bootstrap.crt: |
+#     -----BEGIN CERTIFICATE-----
+#     MIIB2jCCAYCgAwIBAgIUQd7/U2270XzbBpwSWYr08fL1dUowCgYIKoZIzj0EAwIw
+#     KTEnMCUGA1UEAwwedXBzdHJlYW0tYXV0aG9yaXR5LmV4YW1wbGUub3JnMB4XDTIy
+#     MDkxMDIxMDExNVoXDTMyMDkwNzIxMDExNVowKTEnMCUGA1UEAwwedXBzdHJlYW0t
+#     YXV0aG9yaXR5LmV4YW1wbGUub3JnMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE
+#     RFtrDQhvACzViAAbLwalFDfTzsGHEDkGmHimT+n9LrYja2wJc1yDsi5dZpMcxBlG
+#     0XXoj48czQ5vYAXV+NHTsqOBhTCBgjAdBgNVHQ4EFgQUb+40UJVAtq72SyDW4Kcg
+#     zZD/CK4wHwYDVR0jBBgwFoAUb+40UJVAtq72SyDW4KcgzZD/CK4wDwYDVR0TAQH/
+#     BAUwAwEB/zAfBgNVHREEGDAWhhRzcGlmZmU6Ly9leGFtcGxlLm9yZzAOBgNVHQ8B
+#     Af8EBAMCAQYwCgYIKoZIzj0EAwIDSAAwRQIgbZWaAticK3342ulJP0y7nZ7Pwyr1
+#     0HMXxHqm+v3e9dICIQCr1gFEsXzZWZPHMQ/ms4QslIcSBwwespp3bqiQui42Jg==
+#     -----END CERTIFICATE-----
+
+# ---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nestedb-agent-conf
+  namespace: spire
+data:
+  agent.conf: |
+    agent {
+      data_dir = "/run/spire"
+      log_level = "DEBUG"
+      server_address = "nestedb-server"
+      server_port = "8081"
+      socket_path = "/run/spire/sockets/agent.sock"
+      trust_domain = "example.org"
+      insecure_bootstrap = true
+      #trust_bundle_path = "/run/spire/bootstrap/bootstrap.crt"
+    }
+
+    plugins {
+      NodeAttestor "k8s_sat" {
+        plugin_data {
+          cluster = "spire"
+        }
+      }
+
+      KeyManager "memory" {
+        plugin_data {
+        }
+      }
+
+      WorkloadAttestor "k8s" {
+        plugin_data {
+        }
+      }
+
+      # WorkloadAttestor "unix" {
+      #     plugin_data {
+      #     }
+      # }
+    }
+
+    # health_checks {
+    #   listener_enabled = true
+    #   bind_address = "0.0.0.0"
+    #   bind_port = "8080"
+    #   live_path = "/live"
+    #   ready_path = "/ready"
+    # }
+
+---
+
+# NestedB Agent daemonset...
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nestedb-agent
+  namespace: spire
+  labels:
+    app: nestedb-agent
+    realm: spire-control-plane
+spec:
+  selector:
+    matchLabels:
+      app: nestedb-agent
+  template:
+    metadata:
+      namespace: spire
+      labels:
+        app: nestedb-agent
+        realm: spire-control-plane
+    spec:
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: nestedb-agent
+      initContainers:
+        - name: init
+          # This is a small image with wait-for-it, choose whatever image
+          # you prefer that waits for a service to be up. This image is built
+          # from https://github.com/lqhl/wait-for-it
+          image: gcr.io/spiffe-io/wait-for-it
+          args: ["-t", "30", "nestedb-server:8081"]
+      containers:
+        - name: nestedb-agent
+          image: gcr.io/spiffe-io/spire-agent:1.5.3
+          args: ["-config", "/run/spire/config/agent.conf"]
+          volumeMounts:
+            - name: spire-config
+              mountPath: /run/spire/config
+              readOnly: true
+            # - name: spire-agent-bootstrap
+            #   mountPath: /run/spire/bootstrap
+            #   readOnly: true
+            - name: nestedb-agent-socket
+              mountPath: /run/spire/sockets
+              readOnly: false
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8080
+            failureThreshold: 2
+            initialDelaySeconds: 15
+            periodSeconds: 60
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: spire-config
+          configMap:
+            name: nestedb-agent-conf
+        # - name: spire-agent-bootstrap
+        #   configMap:
+        #     name: nestedb-agent-bootstrap-cert
+          # Share the UDS socket to enable workloads to attest to this agent.
+        - name: nestedb-agent-socket
+          hostPath:
+            path: /run/spire/sockets/nestedb
+            type: DirectoryOrCreate

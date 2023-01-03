@@ -1,0 +1,12 @@
+configMapGenerator:
+- name: envoy-config
+  namespace: spire
+  files:
+  - envoy-config-inbound.yaml
+  - envoy-config-inbound-emissary.yaml
+  - envoy-config-outbound.yaml
+  - envoy-config-outbound-emissary.yaml
+
+generatorOptions:
+  disableNameSuffixHash: true
+

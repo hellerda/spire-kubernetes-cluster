@@ -1,0 +1,159 @@
+# Root Server base config...
+# - Namespace, ServiceAccount,ClusterRole, ClusterRoleBinding, ConfigMaps, Secrets, etc.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spire
+
+---
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: root-server
+  namespace: spire
+
+---
+
+# ClusterRole to allow root-server node attestor to query Token Review API
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: root-server-cluster-role
+rules:
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+
+---
+
+# Binds above cluster role to root-server service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: root-server-cluster-role-binding
+subjects:
+- kind: ServiceAccount
+  name: root-server
+  namespace: spire
+roleRef:
+  kind: ClusterRole
+  name: root-server-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+
+# Default UpstreamAuthority key. To generate new, use gen-upstream-authority-configmap().
+apiVersion: v1
+kind: Secret
+metadata:
+  name: root-server-upstream-authority
+  namespace: spire
+type: Opaque
+data:
+  bootstrap.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JR0hBZ0VBTUJNR0J5cUdTTTQ5QWdFR0NDcUdTTTQ5QXdFSEJHMHdhd0lCQVFRZ0cxcVdRMUMyazBaTWlLeWYKb0J6cElsZWdnMUM4RU1taWhsckVFYjJYeTl5aFJBTkNBQVJFVzJzTkNHOEFMTldJQUJzdkJxVVVOOVBPd1ljUQpPUWFZZUtaUDZmMHV0aU5yYkFselhJT3lMbDFta3h6RUdVYlJkZWlQanh6TkRtOWdCZFg0MGRPeQotLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tCg==
+
+---
+
+# Default UpstreamAuthority cert. To generate new, use gen-upstream-authority-configmap().
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: root-server-upstream-authority
+  namespace: spire
+data:
+  bootstrap.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIIB2jCCAYCgAwIBAgIUQd7/U2270XzbBpwSWYr08fL1dUowCgYIKoZIzj0EAwIw
+    KTEnMCUGA1UEAwwedXBzdHJlYW0tYXV0aG9yaXR5LmV4YW1wbGUub3JnMB4XDTIy
+    MDkxMDIxMDExNVoXDTMyMDkwNzIxMDExNVowKTEnMCUGA1UEAwwedXBzdHJlYW0t
+    YXV0aG9yaXR5LmV4YW1wbGUub3JnMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE
+    RFtrDQhvACzViAAbLwalFDfTzsGHEDkGmHimT+n9LrYja2wJc1yDsi5dZpMcxBlG
+    0XXoj48czQ5vYAXV+NHTsqOBhTCBgjAdBgNVHQ4EFgQUb+40UJVAtq72SyDW4Kcg
+    zZD/CK4wHwYDVR0jBBgwFoAUb+40UJVAtq72SyDW4KcgzZD/CK4wDwYDVR0TAQH/
+    BAUwAwEB/zAfBgNVHREEGDAWhhRzcGlmZmU6Ly9leGFtcGxlLm9yZzAOBgNVHQ8B
+    Af8EBAMCAQYwCgYIKoZIzj0EAwIDSAAwRQIgbZWaAticK3342ulJP0y7nZ7Pwyr1
+    0HMXxHqm+v3e9dICIQCr1gFEsXzZWZPHMQ/ms4QslIcSBwwespp3bqiQui42Jg==
+    -----END CERTIFICATE-----
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: root-server-conf
+  namespace: spire
+data:
+  server.conf: |
+    server {
+      trust_domain = "example.org"
+      jwt_issuer = "spire-root-server"
+      bind_address = "0.0.0.0"
+      bind_port = "8081"
+      #socket_path = "/tmp/spire-server/private/api.sock"
+      data_dir = "/run/spire/data"
+      log_level = "DEBUG"
+      # default_svid_ttl:  The (x509) SVID TTL. Default: 1h.
+      # NOTE Actual SVID TTL will never be longer than ca_ttl, regardless what's configured here.
+      default_svid_ttl = "1h"
+      # agent_ttl:  The TTL for agent SVIDs, and thus the longest an
+      # agent can survive without checking back in to the server.
+      # Default: Value of default_svid_ttl  (since v1.2.0)
+      #agent_ttl = "24h"
+      # ca_ttl:  The lifetime of SVID signing keys (JWT and x509).
+      ca_ttl = "24h"
+      # ca_subject = {
+      #   country = ["US"],
+      #   organization = ["SPIFFE"],
+      #   common_name = "",
+      # }
+
+      federation {
+        bundle_endpoint {
+          address = "0.0.0.0"
+          port = 8443
+        }
+      }
+    }
+
+    plugins {
+      DataStore "sql" {
+        plugin_data {
+          database_type = "sqlite3"
+          connection_string = "/run/spire/data/datastore.sqlite3"
+        }
+      }
+
+      NodeAttestor "k8s_sat" {
+        plugin_data {
+          clusters = {
+            "spire" = {
+              service_account_allow_list = ["spire:root-agent"]
+              use_token_review_api_validation = true
+            }
+          }
+        }
+      }
+
+      KeyManager "disk" {
+        plugin_data {
+          keys_path = "/run/spire/data/keys.json"
+        }
+      }
+
+      UpstreamAuthority "disk" {
+        plugin_data {
+          key_file_path = "/run/spire/ua-key/bootstrap.key"
+          cert_file_path = "/run/spire/ua-cert/bootstrap.crt"
+        }
+      }
+    }
+
+    health_checks {
+      listener_enabled = true
+      bind_address = "0.0.0.0"
+      bind_port = "8080"
+      live_path = "/live"
+      ready_path = "/ready"
+    }

@@ -1,0 +1,171 @@
+# SPIRE OIDC Provider...
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: oidc-provider
+  namespace: spire
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: oidc-provider-cluster-role
+  namespace: spire
+rules:
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+
+---
+
+# Binds above cluster role to oidc-provider service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: oidc-provider-cluster-role-binding
+subjects:
+- kind: ServiceAccount
+  name: oidc-provider
+  namespace: spire
+roleRef:
+  kind: ClusterRole
+  name: oidc-provider-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oidc-provider-conf
+  namespace: spire
+data:
+  oidcp.conf: |
+    log_level = "debug"
+
+    domains = ["oidc.spire.mydomain.com", "localhost", "oidc-provider", ""]
+
+    # acme {
+    #     # cache_dir = "/some/path/on/disk/to/cache/creds"
+    #     email = "email@domain.test"
+    #     tos_accepted = true
+    # }
+
+    # OIDC endpoint LISTENING address... In lieu of ACME, use one of...
+    # 1. Run on HTTP...
+    # insecure_addr = "localhost:2080"
+    insecure_addr = "0.0.0.0:2080"
+    # 2. Run on UDS...
+    # listen_socket_path = "/tmp/spire-oidc-discovery-provider/server.sock"
+    # listen_socket_path = "/tmp/server.sock"
+    # 3. Front-end with nginx reverse proxy and direct to either of above on the back-end.
+
+    # SPIRE API access address... use one of...
+    # server_api {
+    #     # Requires no reg entry or other authorization.
+    #     # Caveat: We MUST be running on the same (host) node as our server or this will FAIL.  (see nodeSelector below)
+    #     address = "unix:///run/spire/sockets/api.sock"
+    #     poll_interval = "20s"
+    # }
+
+    workload_api {
+        # Requires WL-level registration entry to authorize access.
+        # ALSO you must specify trust domain explicitly.
+        socket_path = "/run/spire/sockets/agent.sock"
+        trust_domain = "example.org"
+        # It's verbose on this port, as you see the WL attestation on each poll.
+        poll_interval = "20s"
+    }
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oidc-provider
+  namespace: spire
+  labels:
+    app: oidc-provider
+    realm: spire-control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oidc-provider
+  template:
+    metadata:
+      namespace: spire
+      labels:
+        app: oidc-provider
+        realm: spire-control-plane
+    spec:
+      # hostPID: true
+      # hostNetwork: true
+      # dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: oidc-provider
+      # WHEN RUNNING AGAINST THE SPIRE SERVER...
+      # The OIDCP must run on the same node as the server, to be able to reach the UDS hosted by that server.
+      # A simple (but cumbersome) way to enforce this is by Node Affinity...
+      nodeSelector:
+          # This requires manual editing: you must enter here, the node where OIDC Provider's target SPIRE Server is running.
+          # Alternatives include:
+          # A. Run OIDCP as sidecar to its associated server; affinity problem solved.
+          # B. Associate OIDCP with a SPIRE Agent instead of server; Agent is a daemonset so runs on every node; problem solved.
+          #    (Note this requires a workload registration entry for OIDCP)
+          #
+        # kubernetes.io/hostname: ip-192-168-10-101.us-east-2.compute.internal
+        # kubernetes.io/hostname: ip-192-168-10-102.us-east-2.compute.internal
+        # kubernetes.io/hostname: ip-192-168-10-103.us-east-2.compute.internal
+      containers:
+        - name: oidc-provider
+          image: gcr.io/spiffe-io/oidc-discovery-provider:1.5.3
+          args: ["-config", "/run/spire/config/oidcp.conf"]
+          volumeMounts:
+            - name: spire-config
+              mountPath: /run/spire/config
+              readOnly: true
+          # - name: spire-data
+          #   mountPath: /run/spire/data
+          #   readOnly: false
+              # For accessing the nestedA server or agent socket.  The provider supports both, so we can
+              # switch between them for testing.  Both files ("api.sock", "agent.sock") are mapped here.
+            - name: nesteda-spire-sockets
+              mountPath: /run/spire/sockets
+              readOnly: true
+
+      volumes:
+        - name: spire-config
+          configMap:
+            name: oidc-provider-conf
+          # For accessing the nestedA server or agent socket.  The provider supports both, so we can
+          # switch between them for testing.  Both files ("api.sock", "agent.sock") are mapped to the
+          # same path on the host.
+        - name: nesteda-spire-sockets
+          hostPath:
+            path: /run/spire/sockets/nesteda
+            type: Directory
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: oidc-provider
+  namespace: spire
+spec:
+  # NOTE The Kube Ingress supports a backend Service of type "NodePort" or "LoadBalancer".
+  # When not using the ALBC we probably want LoadBalancer, to give us an Internet accessible IP.
+  # With the ALBC we should use NodePort, as there is no reason to have an additional endpoint
+  # exposed to the Internet, as that's what the Ingress ALB is for.
+  type: NodePort
+  ports:
+    - name: oidc
+      port: 80
+      targetPort: 2080
+      # port: 443
+      # targetPort: 2443
+      protocol: TCP
+  selector:
+    app: oidc-provider
+
