@@ -119,8 +119,11 @@ duplicate-configmap-simple() {
 
 # Check required programs
 for prog in jq openssl; do
-    if ! hash $prog; then
+    if ! hash $prog &>/dev/null; then
         echo "${red}Please install \"$prog\".${norm}"
         exit 1
     fi
 done
+
+# Get the IP of the specified pod. Assumes only one running instance of the pod.
+get-podIP() { kubectl get pod -n "$1" -l "app=$2" -o jsonpath='{.items[0].status.podIP}'; }

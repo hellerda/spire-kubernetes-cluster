@@ -120,25 +120,23 @@ kubectl wait --for=condition=ready pod --timeout=60s -n spire -l app=federated-a
 
 
 log "Bootstrapping federated relationship..."
-kubectl exec -it -n spire nestedc-server-0 -- wget --no-check-certificate -qO /tmp/federated-server.bundle.jwk https://federated-server:8443
+kubectl wait --for=condition=ready pod --timeout=60s -n spire -l app=nestedc-server
 
 kubectl exec -it -n spire nestedc-server-0 -- /opt/spire/bin/spire-server federation create \
     -bundleEndpointProfile https_spiffe \
     -bundleEndpointURL "https://federated-server:8443/" \
     -endpointSpiffeID "spiffe://auxiliary.org/spire/server" \
     -trustDomain "auxiliary.org" \
-    -trustDomainBundleFormat spiffe \
-    -trustDomainBundlePath "/tmp/federated-server.bundle.jwk"
-
-kubectl exec -it -n spire federated-server-0 -- wget --no-check-certificate -qO /tmp/nestedc-server.bundle.jwk https://nestedc-server:8443
+    -trustDomainBundleFormat pem \
+    -trustDomainBundlePath "/run/spire/fed-cert/bootstrap.crt"
 
 kubectl exec -it -n spire federated-server-0 -- /opt/spire/bin/spire-server federation create \
     -bundleEndpointProfile https_spiffe \
     -bundleEndpointURL "https://nestedc-server:8443/" \
     -endpointSpiffeID "spiffe://example.org/spire/server" \
     -trustDomain "example.org" \
-    -trustDomainBundleFormat spiffe \
-    -trustDomainBundlePath "/tmp/nestedc-server.bundle.jwk"
+    -trustDomainBundleFormat pem \
+    -trustDomainBundlePath "/run/spire/fed-cert/bootstrap.crt"
 
 
 # Create federated workload entries...

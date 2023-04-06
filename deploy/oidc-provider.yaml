@@ -119,7 +119,7 @@ spec:
         # kubernetes.io/hostname: ip-192-168-10-103.us-east-2.compute.internal
       containers:
         - name: oidc-provider
-          image: gcr.io/spiffe-io/oidc-discovery-provider:1.5.5
+          image: ghcr.io/spiffe/oidc-discovery-provider:1.6.1
           args: ["-config", "/run/spire/config/oidcp.conf"]
           volumeMounts:
             - name: spire-config
