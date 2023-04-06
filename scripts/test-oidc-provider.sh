@@ -41,6 +41,7 @@ keylist=""
 if [ -z "$keylist" ]; then
     # Query the TCP port...
     targetip="$(get-podIP spire oidc-provider)"
+    if isIPv6 "$targetip"; then targetip="[$targetip]"; fi
     keylist=$(kubectl exec -n spire pod/alpine -- curl -s http://"$targetip":2080/keys | sed -ne '/^{/,$ p' | get_kids)
 
     if [ -n "$keylist" ]; then
