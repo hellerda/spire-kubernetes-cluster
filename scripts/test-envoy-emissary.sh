@@ -19,9 +19,6 @@ VERBOSE="false"
 SETTLE_TIME=5
 
 
-# Get the IP of the specified pod. Assumes only one running instance of the pod.
-get-podIP() { kubectl get pod -n "$1" -l "app=$2" -o jsonpath='{.items[0].status.podIP}'; }
-
 make_int () {
     # Sanitize integer values
     # The 1st param is the default value to apply if the 2nd param is not sane.
@@ -38,7 +35,7 @@ all_clear() {
     # Check that none of listed pods are currently running..."
     for ((i=1;i<=20;i++)); do
         if ! kubectl get pods -n spire -o json | \
-             jq -re '.items[] | select(.metadata.labels.app | match("spiffe-client|spiffe-client-envoy|spiffe-client-envoy-emissary"))' &>/dev/null
+             jq -re '.items[].metadata.labels.app | select(. != null) | match("spiffe-client|spiffe-client-envoy|spiffe-client-envoy-emissary")' &>/dev/null
         then
             log "${green}All clear.${norm}"
             return 0

@@ -90,7 +90,8 @@ data:
       log_level = "DEBUG"
       # default_svid_ttl:  The (x509) SVID TTL. Default: 1h.
       # NOTE Actual SVID TTL will never be longer than ca_ttl, regardless what's configured here.
-      default_svid_ttl = "1h"
+      default_x509_svid_ttl = "1h"
+      default_jwt_svid_ttl = "1h"
       # agent_ttl:  The TTL for agent SVIDs, and thus the longest an
       # agent can survive without checking back in to the server.
       # Default: Value of default_svid_ttl  (since v1.2.0)

@@ -16,10 +16,10 @@ set -e
 log "Checking that OIDC Provider is available..."
 kubectl wait --for=condition=ready --timeout=10s pod -n spire -l app=oidc-provider
 
-if ! kubectl exec -n spire deploy/oidc-provider -- apk add -q --no-cache curl
-then
-    echo "${red}Unable to install curl, dunno why.${norm}"
-    exit 1
+log "Starting test pod..."
+if ! kubectl get pod -n spire alpine &>/dev/null; then
+  kubectl run alpine -n spire --image alpine:latest --command -- sh -c "apk add curl && sleep 999999"
+  kubectl wait --for=condition=ready --timeout=10s pod -n spire alpine >/dev/null
 fi
 
 # We could use any server really, they should all be the same.  Should be.
@@ -38,13 +38,10 @@ log "Checking keys from OIDC Provider..."
 keylist=""
 
 # Query the UDS...
-keylist=$(kubectl exec -n spire deploy/oidc-provider 2>/dev/null -- curl -s --unix-socket /tmp/server.sock localhost/keys | sed -ne '/^{/,$ p' | get_kids)
-
-if [ -n "$keylist" ]; then
-    echo "${green}Read OIDC keys from UDS.${norm}"
-else
+if [ -z "$keylist" ]; then
     # Query the TCP port...
-    keylist=$(kubectl exec -n spire deploy/oidc-provider -- curl -s http://localhost:2080/keys | sed -ne '/^{/,$ p' | get_kids)
+    targetip="$(get-podIP spire oidc-provider)"
+    keylist=$(kubectl exec -n spire pod/alpine -- curl -s http://"$targetip":2080/keys | sed -ne '/^{/,$ p' | get_kids)
 
     if [ -n "$keylist" ]; then
         echo "${green}Read OIDC keys from local TCP port.${norm}"
@@ -66,7 +63,7 @@ fi
 
 log "Checking availability of OIDC Provider service..."
 keylist=""
-keylist=$(kubectl exec -n spire deploy/oidc-provider -- curl -s http://oidc-provider:80/keys | sed -ne '/^{/,$ p' | get_kids)
+  keylist=$(kubectl exec -n spire pod/alpine -- curl -s http://oidc-provider:80/keys | sed -ne '/^{/,$ p' | get_kids)
 
 if [ -z "$keylist" ]; then
     echo "${yellow}warning: Service \"oidc-provider\" is not available.${norm}"
@@ -76,9 +73,10 @@ else
 
     if [ "$bundle_keys" == "$oidc_service_keys" ]; then
         echo "${green}Keys from OIDC service match keys from OIDC local port.${norm}"
-        exit 0
     else
         echo "${red}Failed! Mismatch between keys from OIDC provider service and keys from OIDC local port.${norm}"
         exit 1
     fi
 fi
+
+kubectl delete -n spire pod/alpine --now >/dev/null

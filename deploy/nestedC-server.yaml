@@ -65,7 +65,8 @@ data:
       #socket_path = "/tmp/spire-server/private/api.sock"
       data_dir = "/run/spire/data"
       log_level = "DEBUG"
-      default_svid_ttl = "24h"
+      default_x509_svid_ttl = "1h"
+      default_jwt_svid_ttl = "1h"
       ca_ttl = "24h"
       # ca_subject = {
       #   country = ["US"],
@@ -177,7 +178,7 @@ spec:
       containers:
           # NestedC server container...
         - name: nestedc-server
-          image: gcr.io/spiffe-io/spire-server:1.5.5
+          image: ghcr.io/spiffe/spire-server:1.6.1
           args: ["-config", "/run/spire/config/server.conf"]
           ports:
             - containerPort: 8081
@@ -196,6 +197,10 @@ spec:
             - name: shared-slash-tmp
               mountPath: /tmp
               readOnly: false
+              # Remote server bundle, for bootstrapping federation...
+            - name: remote-federated-endpoint-cert
+              mountPath: /run/spire/fed-cert
+              readOnly: true
           # livenessProbe:
           #   httpGet:
           #     path: /live
@@ -248,6 +253,10 @@ spec:
           hostPath:
             path: /run/spire/sockets/root
             type: Directory
+          # Remote server bundle, for bootstrapping federation...
+        - name: remote-federated-endpoint-cert
+          configMap:
+            name: federated-server-upstream-authority
           # Additional configuration, for running k8sr in the same pod..
         - name: k8s-workload-registrar-config
           configMap:
